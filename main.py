@@ -21,3 +21,5 @@ time.sleep(20)
 print(f"Inbound %s", list(node_1.nodes_inbound))
 print(f"Outbound %s", list(node_1.nodes_outbound))
 
+
+
