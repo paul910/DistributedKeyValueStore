@@ -485,12 +485,14 @@ class HashTableService:
 
 def decide_addition_strategy(ip_address, port, partitions):
     NODES_PER_CLUSTER = 3  # number of replicas per cluster
-    replica = False
     current_topology = eval(partitions)
     for cluster in current_topology:
         if len(cluster) < NODES_PER_CLUSTER:
             cluster.append(f"{ip_address}:{port}")
+            return str(current_topology)
 
+    # if no cluster has space, create new cluster
+    current_topology.append([f"{ip_address}:{port}"])
     return str(current_topology)
 
 
