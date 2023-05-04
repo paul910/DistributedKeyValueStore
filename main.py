@@ -16,10 +16,12 @@ time.sleep(2)
 
 print(node_1.connect_with_node('127.0.0.1', 10002))
 
-time.sleep(20)
+time.sleep(2)
 
 print(f"Inbound %s", list(node_1.nodes_inbound))
 print(f"Outbound %s", list(node_1.nodes_outbound))
+
+node_1.send_to_nodes("Hello World")
 
 
 
