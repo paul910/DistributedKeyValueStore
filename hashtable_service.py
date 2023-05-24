@@ -438,6 +438,9 @@ class HashTableService:
 
             except Exception as e:
                 print(e)
+                
+        elif msg == "heartbeat":
+            output = "heartbeat_ack"
 
         else:
             output = "Error: Invalid command"
@@ -462,6 +465,38 @@ class HashTableService:
                 print("Error processing message from client")
                 conn.close()
                 break
+            
+    def leader_heartbeat(self, interval=5, timeout=10):
+        while True:
+            time.sleep(interval)
+            if not self.is_leader:
+                leader_index = 0
+                try:
+                    with self.socket_locks[self.cluster_index][leader_index]:
+                        if self.conns[self.cluster_index][leader_index][2] is None:
+                            self.conns[self.cluster_index][leader_index][2] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            self.conns[self.cluster_index][leader_index][2].setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                            self.conns[self.cluster_index][leader_index][2].connect((self.conns[self.cluster_index][leader_index][0], self.conns[self.cluster_index][leader_index][1]))
+                        
+                        self.conns[self.cluster_index][leader_index][2].send("heartbeat".encode())
+                        self.conns[self.cluster_index][leader_index][2].settimeout(timeout)
+                        response = self.conns[self.cluster_index][leader_index][2].recv(1024).decode()
+                        if response != "heartbeat_ack":
+                            raise Exception("Invalid response from leader")
+                except Exception as e:
+                    print("Leader is not responding, electing a new leader...")
+                    self.elect_new_leader()
+
+    def elect_new_leader(self):
+        with self.cluster_lock:
+            new_leader_index = (self.partitions[self.cluster_index].index(f"{self.ip}:{self.port}") + 1) % len(self.partitions[self.cluster_index])
+            if new_leader_index == 0:
+                self.is_leader = True
+                print("This replica is now the leader")
+            else:
+                leader_ip, leader_port = self.partitions[self.cluster_index][new_leader_index].split(':')
+                self.conns[self.cluster_index][0] = [leader_ip, int(leader_port), None]
+                print(f"New leader elected: {leader_ip}:{leader_port}")
 
     def listen_to_clients(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -469,6 +504,8 @@ class HashTableService:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('0.0.0.0', int(self.port)))
         sock.listen(50)
+        
+        utils.run_thread(fn=self.leader_heartbeat, args=())
 
         while True:
             try:
