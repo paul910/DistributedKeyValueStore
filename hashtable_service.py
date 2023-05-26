@@ -473,7 +473,7 @@ class HashTableService:
                 leader_index = 0
                 try:
                     with self.socket_locks[self.cluster_index][leader_index]:
-                        if self.conns[self.cluster_index][leader_index][2] is None:
+                        if self.conns[self.cluster_index][leader_index][2] is None or self.conns[self.cluster_index][leader_index][2]._closed:
                             self.conns[self.cluster_index][leader_index][2] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                             self.conns[self.cluster_index][leader_index][2].setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                             self.conns[self.cluster_index][leader_index][2].connect((self.conns[self.cluster_index][leader_index][0], self.conns[self.cluster_index][leader_index][1]))
@@ -485,18 +485,53 @@ class HashTableService:
                             raise Exception("Invalid response from leader")
                 except Exception as e:
                     print("Leader is not responding, electing a new leader...")
+                    if self.conns[self.cluster_index][leader_index][2] is not None:
+                        self.conns[self.cluster_index][leader_index][2].close()
+                        self.conns[self.cluster_index][leader_index][2] = None
+                        
+                        print(self.conns[self.cluster_index])
+                        
                     self.elect_new_leader()
 
     def elect_new_leader(self):
         with self.cluster_lock:
-            new_leader_index = (self.partitions[self.cluster_index].index(f"{self.ip}:{self.port}") + 1) % len(self.partitions[self.cluster_index])
-            if new_leader_index == 0:
+            # Identify next possible leader
+            next_leader_index = (self.partitions[self.cluster_index].index(f"{self.ip}:{self.port}") + 1) % len(self.partitions[self.cluster_index])
+            
+            while True:
+                leader_ip, leader_port = self.partitions[self.cluster_index][next_leader_index].split(':')
+
+                if self.check_node_availability(leader_ip, leader_port):
+                    break
+                else:
+                    next_leader_index = (next_leader_index + 1) % len(self.partitions[self.cluster_index])
+
+            # If the next possible leader is self, become leader
+            if (leader_ip, str(leader_port)) == (self.ip, str(self.port)):
                 self.is_leader = True
-                print("This replica is now the leader")
+                print("This node is now the leader")
+
+            # If the next possible leader is not self, wait for its leadership
             else:
-                leader_ip, leader_port = self.partitions[self.cluster_index][new_leader_index].split(':')
-                self.conns[self.cluster_index][0] = [leader_ip, int(leader_port), None]
-                print(f"New leader elected: {leader_ip}:{leader_port}")
+                self.is_leader = False
+                print(f"Waiting for the new leader {leader_ip}:{leader_port}...")
+                # Create a new socket connection to the new leader
+                new_leader_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                new_leader_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                new_leader_socket.connect((leader_ip, int(leader_port)))
+                # Replace the old leader socket with the new one
+                self.conns[self.cluster_index][0] = [leader_ip, leader_port, new_leader_socket]
+
+                
+    def check_node_availability(self, ip, port):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((ip, int(port)))
+            sock.close()
+            return True
+        except Exception as e:
+            print(f"Node {ip}:{port} is not available: {e}")
+            return False
 
     def listen_to_clients(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
