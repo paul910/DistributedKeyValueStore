@@ -526,7 +526,7 @@ class HashTableService:
             # If the next possible leader is not self, wait for its leadership
             else:
                 self.is_leader = False
-                time.sleep(2) # make sure new leader is ready
+                time.sleep(4) # make sure new leader is ready
                 print(f"Waiting for the new leader {leader_ip}:{leader_port}...")
                 self.initialize_commit_log()
                 sys_argv = ["", self.ip, self.port, "REJOIN", leader_ip, leader_port, self.cluster_index]
