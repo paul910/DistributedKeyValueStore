@@ -2,14 +2,13 @@ import sys, os, re, socket
 
 from threading import Thread, Lock
 import time
-import pickle
 from random import shuffle
 from pathlib import Path
 
-from hashtable import HashTable
-from consistent_hashing import ConsistentHashing
-from commit_log import CommitLog
-import utils
+from utils.hashtable import HashTable
+from utils.consistent_hashing import ConsistentHashing
+from utils.commit_log import CommitLog
+from utils import utils
 
 
 class HashTableService:
@@ -17,7 +16,11 @@ class HashTableService:
         self.ip = ip
         self.port = port
         self.ht = HashTable()
-        self.commit_log = CommitLog(file=f"commit-log-{self.ip}-{self.port}.txt")
+
+        if not os.path.exists("commit-logs"):
+            os.mkdir("commit-logs")
+
+        self.commit_log = CommitLog(file=f"commit-logs/commit-log-{self.ip}-{self.port}.txt")
         self.chash = ConsistentHashing()
         self.partitions = eval(partitions)
         self.conns = [[None] * len(self.partitions[i]) for i in range(len(self.partitions))]
