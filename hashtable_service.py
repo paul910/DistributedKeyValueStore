@@ -28,9 +28,7 @@ class HashTableService:
         self.commit_temp = {}
         self.commit_temp_lock = Lock()
 
-        # Initialize commit log file
-        commit_logfile = Path(self.commit_log.file)
-        commit_logfile.touch(exist_ok=True)
+        self.initialize_commit_log()
 
         for i in range(len(self.partitions)):
             cluster = self.partitions[i]
@@ -48,12 +46,20 @@ class HashTableService:
                     # 3rd element is the socket object
                     self.conns[i][j] = [ip, port, None]
 
+        print(self.conns)
         self.consistent_hash_join()
 
         utils.run_thread(fn=self.join_replica, args=())
         utils.run_thread(fn=self.join_cluster, args=())
 
         print("Ready....")
+
+    def initialize_commit_log(self):
+        # Initialize commit log file
+        commit_logfile = Path(self.commit_log.file)
+        commit_logfile.touch(exist_ok=True)
+        with open(self.commit_log.file, 'r+') as f:
+            f.truncate(0)
 
     def consistent_hash_join(self):
         # Add leader nodes to consistent hashing
@@ -107,6 +113,7 @@ class HashTableService:
     def join_cluster(self):
         # Leader asks other leaders to add itself
         if self.is_leader:
+            print("I am leader")
             # Send message to all leaders other than itself
             msg = f"join {self.ip} {self.port} {self.cluster_index}"
             resp = utils.broadcast_join(msg, self.conns, self.cluster_lock, self.socket_locks, self.cluster_index)
@@ -510,18 +517,17 @@ class HashTableService:
             if (leader_ip, str(leader_port)) == (self.ip, str(self.port)):
                 self.is_leader = True
                 print("This node is now the leader")
+                self.conns[self.cluster_index] = [[None]]
+                self.partitions[self.cluster_index] = [f"{self.ip}:{self.port}"]
 
             # If the next possible leader is not self, wait for its leadership
             else:
                 self.is_leader = False
+                time.sleep(2) # make sure new leader is ready
                 print(f"Waiting for the new leader {leader_ip}:{leader_port}...")
-                # Create a new socket connection to the new leader
-                new_leader_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                new_leader_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                new_leader_socket.connect((leader_ip, int(leader_port)))
-                # Replace the old leader socket with the new one
-                self.conns[self.cluster_index][0] = [leader_ip, leader_port, new_leader_socket]
-
+                self.initialize_commit_log()
+                sys_argv = ["", self.ip, self.port, "REJOIN", leader_ip, leader_port, self.cluster_index]
+                getTopologyAndConnect(self.ip, self.port, "REJOIN", sys_argv)
                 
     def check_node_availability(self, ip, port):
         try:
@@ -555,9 +561,8 @@ class HashTableService:
                 print("Error accepting connection...")
 
 
-def decide_addition_strategy(ip_address, port, partitions):
+def decide_addition_strategy(ip_address, port, current_topology):
     NODES_PER_CLUSTER = 3  # number of replicas per cluster
-    current_topology = eval(partitions)
     for cluster in current_topology:
         if len(cluster) < NODES_PER_CLUSTER:
             cluster.append(f"{ip_address}:{port}")
@@ -568,24 +573,39 @@ def decide_addition_strategy(ip_address, port, partitions):
     return str(current_topology)
 
 
+def getTopologyAndConnect(ip_address, port, partitions, sys_argv_list):
+    if partitions != "NEW" and partitions != "REJOIN":
+        dht = HashTableService(ip=ip_address, port=port, partitions=partitions)
+        dht.listen_to_clients()
+    assert len(sys_argv_list) >= 6, "Invalid number of arguments"
+    # new node with no prior knowledge of network topology
+    # connect to known leader and get topology
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.connect((str(sys_argv_list[4]), int(sys_argv_list[5])))
+    server.send("topology".encode())
+    try:
+        current_topology = eval(server.recv(2048).decode())
+        print(f"Current topology: {current_topology}")
+    except:
+        print("Error getting topology from leader")
+        sys.exit(1)
+    if partitions == "NEW":
+        current_topology = decide_addition_strategy(ip_address, port, current_topology)
+    elif partitions == "REJOIN":
+        assert len(sys_argv_list) == 7, "Invalid number of arguments"
+        cluster_index = int(sys_argv_list[6])
+        current_topology[cluster_index].append(f"{ip_address}:{port}")
+        print(f"Rejoining cluster {cluster_index}")
+        print(f"Current topology: {current_topology}")
+
+    dht = HashTableService(ip=ip_address, port=port, partitions=str(current_topology))
+    dht.listen_to_clients()
+
+
 if __name__ == '__main__':
     ip_address = str(sys.argv[1])
     port = int(sys.argv[2])
     partitions = str(sys.argv[3])
 
-    if partitions == "NEW":
-        assert len(sys.argv) == 6, "Invalid number of arguments"
-        # new node with no prior knowledge of network topology
-        # connect to known leader and get topology
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.connect((str(sys.argv[4]), int(sys.argv[5])))
-        try:
-            server.send("topology".encode())
-            partitions = decide_addition_strategy(ip_address, port, server.recv(2048).decode())
-        except:
-            print("Error getting topology from leader")
-            sys.exit(1)
-
-    dht = HashTableService(ip=ip_address, port=port, partitions=partitions)
-    dht.listen_to_clients()
+    getTopologyAndConnect(ip_address, port, partitions, sys.argv)
